@@ -13,7 +13,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         
         # Set the main window properties
-        self.setWindowTitle("Payload Viewer")
+        self.setWindowTitle("Enhanced Viewer UI")
         self.setGeometry(100, 100, 1400, 800)  # Adjust width and height as needed
         self.setStyleSheet("background-color: #2E2E2E; color: #FFFFFF;")  # Dark theme with white text
         
@@ -66,11 +66,13 @@ class MainWindow(QMainWindow):
         top_section_layout = QVBoxLayout(top_section_widget)
         top_section_widget.setStyleSheet(" border-radius: 10px; padding: 10px;")
 
-        top_button = QPushButton("Activate Feature")
-        top_button.setFixedHeight(50)
-        top_button.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; } QPushButton::Hover { background-color: #6A6A6A; } QPushButton::pressed { background-color: #4A4A4A; }")
-        top_button.clicked.connect(self.top_button_clicked)
-        top_section_layout.addWidget(top_button)
+        self.top_button = QPushButton("Auto Adjust")
+        self.top_button.setFixedHeight(50)
+        self.top_button.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+        self.top_button.setEnabled(False)
+        self.top_button_state = False
+        self.top_button.clicked.connect(self.toggle_auto_adjust)
+        top_section_layout.addWidget(self.top_button)
 
         top_label = QLabel("Feature Status: Inactive")
         top_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -84,16 +86,18 @@ class MainWindow(QMainWindow):
         bottom_section_layout = QVBoxLayout(bottom_section_widget)
         bottom_section_widget.setStyleSheet(" border-radius: 10px; padding: 10px;")
 
-        bottom_button1 = QPushButton("Take Snapshot")
+        bottom_button1 = QPushButton("Retract")
         bottom_button1.setFixedHeight(50)
-        bottom_button1.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; } QPushButton::Hover { background-color: #6A6A6A; } QPushButton::pressed { background-color: #4A4A4A; }")
-        bottom_button1.clicked.connect(self.bottom_button1_clicked)
+        bottom_button1.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; } QPushButton::Hover { background-color: #6A6A6A } QPushButton::pressed { background-color: #4A4A4A; }")
+        bottom_button1.clicked.connect(self.retract_button_clicked)
+        self.bottom_button1 = bottom_button1
         bottom_section_layout.addWidget(bottom_button1)
 
-        bottom_button2 = QPushButton("Save Snapshot")
+        bottom_button2 = QPushButton("Extend")
         bottom_button2.setFixedHeight(50)
-        bottom_button2.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; } QPushButton::Hover { background-color: #6A6A6A; } QPushButton::pressed { background-color: #4A4A4A; }")
-        bottom_button2.clicked.connect(self.bottom_button2_clicked)
+        bottom_button2.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; } QPushButton::Hover { background-color: #6A6A6A } QPushButton::pressed { background-color: #4A4A4A; }")
+        bottom_button2.clicked.connect(self.extend_button_clicked)
+        self.bottom_button2 = bottom_button2
         bottom_section_layout.addWidget(bottom_button2)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -105,7 +109,6 @@ class MainWindow(QMainWindow):
         self.slider.setStyleSheet("border-radius: 5px;")
         self.slider.valueChanged.connect(self.slider_value_changed)
         bottom_section_layout.addWidget(self.slider)
-
         right_layout.addWidget(bottom_section_widget, 1)
 
         # Set stretch for columns (3:1 ratio)
@@ -228,14 +231,32 @@ class MainWindow(QMainWindow):
             pass
 
     # Button and slider functions
-    def top_button_clicked(self):
-        pass
+    def toggle_auto_adjust(self):
+        if self.top_button_state:
+            self.top_button.setStyleSheet("QPushButton { background-color: #8B0000; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+            self.top_button.setText("Auto Adjust: Off")
+        else:
+            self.top_button.setStyleSheet("QPushButton { background-color: #006400; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+            self.top_button.setText("Auto Adjust: On")
+        self.top_button_state = not self.top_button_state
 
-    def bottom_button1_clicked(self):
-        pass
+    def extend_button_clicked(self):
+        self.top_button.setEnabled(True)
+        self.top_button.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+        self.bottom_button2.setStyleSheet("QPushButton { background-color: #006400; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+        self.bottom_button1.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+        self.top_button.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+        self.bottom_button2.setStyleSheet("QPushButton { background-color: #006400; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+        self.top_button.setEnabled(True)
 
-    def bottom_button2_clicked(self):
-        pass
+    def retract_button_clicked(self):
+        self.top_button.setEnabled(False)
+        self.top_button.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; }")
+        self.top_button.setText("Auto Adjust")
+        self.top_button_state = False
+        self.bottom_button1.setStyleSheet("QPushButton { background-color: #8B0000; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+        self.bottom_button2.setStyleSheet("QPushButton { background-color: #5A5A5A; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
+        self.bottom_button1.setStyleSheet("QPushButton { background-color: #8B0000; border: none; border-radius: 5px; font-size: 16px; color: #FFFFFF; } QPushButton::pressed { background-color: #4A4A4A; }")
 
     def slider_value_changed(self, value):
         pass
