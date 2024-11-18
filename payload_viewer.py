@@ -13,7 +13,7 @@ from PyQt6.QtGui import QImage, QPixmap, QAction
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtCore import QUrl
 
-from serialcoms import SerialComs  # Ensure serialcoms.py is correctly implemented
+from serialcoms import SerialComs
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
         self.serial_coms.disconnected.connect(self.on_disconnected)
         self.serial_coms.error.connect(self.on_error)
         self.serial_coms.data_received.connect(self.on_data_received)
+        self.serial_coms.latency_measured.connect(self.update_latency_display)
 
         # Define connection state
         self.connected = False
@@ -369,6 +370,16 @@ class MainWindow(QMainWindow):
         self.connection_indicator_dialog.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.connection_indicator_dialog)
 
+        # Latency display
+        latency_layout = QHBoxLayout()
+        latency_label = QLabel("Ping-Pong Latency:")
+        latency_label.setStyleSheet("font-size: 14px;")
+        self.latency_display_label = QLabel("N/A")  # Initial value
+        self.latency_display_label.setStyleSheet("font-size: 14px; color: #FFFFFF;")
+        latency_layout.addWidget(latency_label)
+        latency_layout.addWidget(self.latency_display_label)
+        layout.addLayout(latency_layout)
+
         # Connect/Disconnect button
         self.connection_button_dialog = QPushButton("Connect" if not self.connected else "Disconnect")
         self.connection_button_dialog.setFixedHeight(50)
@@ -419,6 +430,11 @@ class MainWindow(QMainWindow):
             self.connection_indicator_top.setText("Connection: <span style='color: green;'>⬤</span>")
         else:
             self.connection_indicator_top.setText("Connection: <span style='color: red;'>⬤</span>")
+
+    def update_latency_display(self, latency):
+        """Update the latency display in the connection settings."""
+        if hasattr(self, 'latency_display_label'):
+            self.latency_display_label.setText(f"{latency:.2f} ms")
 
     def on_connected(self):
         """Handle actions when a serial connection is established."""

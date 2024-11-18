@@ -3,3 +3,4 @@ opencv_python==4.10.0.84
 PyQt6==6.7.1
 PyQt6_sip==13.8.0
 PyQt6-WebEngine==6.7.0
+pyserial==3.5
