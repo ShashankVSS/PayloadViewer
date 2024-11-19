@@ -73,13 +73,16 @@ class MainWindow(QMainWindow):
         top_section_layout = QVBoxLayout(top_section_widget)
         top_section_widget.setStyleSheet("border-radius: 10px; padding: 10px;")
 
-        # Initialize SerialComs
+        # Initialize SerialComs without default port and baudrate
         self.serial_coms = SerialComs()
         self.serial_coms.connected.connect(self.on_connected)
         self.serial_coms.disconnected.connect(self.on_disconnected)
         self.serial_coms.error.connect(self.on_error)
         self.serial_coms.data_received.connect(self.on_data_received)
         self.serial_coms.latency_measured.connect(self.update_latency_display)
+        self.serial_coms.processed_ranges_avg.connect(self.update_average_range)
+        self.serial_coms.encoder_position_received.connect(self.update_encoder_value)
+        self.serial_coms.extension_state_received.connect(self.update_extension_state)
 
         # Define connection state
         self.connected = False
@@ -110,6 +113,22 @@ class MainWindow(QMainWindow):
         self.top_label.setStyleSheet("font-size: 14px;")
         top_section_layout.addWidget(self.top_label)
 
+        # New Data Display Labels
+        self.average_range_label = QLabel("Average Processed Range: N/A")
+        self.average_range_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.average_range_label.setStyleSheet("font-size: 14px;")
+        top_section_layout.addWidget(self.average_range_label)
+
+        self.encoder_value_label = QLabel("Encoder Value: N/A")
+        self.encoder_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.encoder_value_label.setStyleSheet("font-size: 14px;")
+        top_section_layout.addWidget(self.encoder_value_label)
+
+        self.extension_state_label = QLabel("Current Extension State: N/A")
+        self.extension_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.extension_state_label.setStyleSheet("font-size: 14px;")
+        top_section_layout.addWidget(self.extension_state_label)
+
         right_layout.addWidget(top_section_widget, 1)
 
         # Bottom section of the right column
@@ -128,7 +147,7 @@ class MainWindow(QMainWindow):
                 font-size: 16px; 
                 color: #FFFFFF; 
             } 
-            QPushButton::Hover { 
+            QPushButton::hover { 
                 background-color: #6A6A6A; 
             } 
             QPushButton::pressed { 
@@ -149,7 +168,7 @@ class MainWindow(QMainWindow):
                 font-size: 16px; 
                 color: #FFFFFF; 
             } 
-            QPushButton::Hover { 
+            QPushButton::hover { 
                 background-color: #6A6A6A; 
             } 
             QPushButton::pressed { 
@@ -181,7 +200,7 @@ class MainWindow(QMainWindow):
                 font-size: 16px; 
                 color: #FFFFFF; 
             } 
-            QPushButton::Hover { 
+            QPushButton::hover { 
                 background-color: #6A6A6A; 
             } 
             QPushButton::pressed { 
@@ -266,7 +285,7 @@ class MainWindow(QMainWindow):
     def start_webcam(self):
         """Start the webcam feed."""
         if self.cap is None:
-            self.cap = cv2.VideoCapture(1)  # Adjust camera index as needed
+            self.cap = cv2.VideoCapture(0)  # Adjust camera index as needed
         if not self.cap.isOpened():
             QMessageBox.critical(self, "Webcam Error", "Failed to open webcam.")
             return
@@ -330,7 +349,8 @@ class MainWindow(QMainWindow):
 
     def open_connection_settings_dialog(self):
         """Open a dialog to manage serial connection settings."""
-        dialog = QDialog(self)
+        self.connection_settings_dialog = QDialog(self)
+        dialog = self.connection_settings_dialog  # Alias for convenience
         dialog.setWindowTitle("Connection Settings")
         dialog.setStyleSheet("background-color: #3A3A3A; color: #FFFFFF; border-radius: 10px; padding: 10px;")
 
@@ -357,9 +377,9 @@ class MainWindow(QMainWindow):
         baud_label.setStyleSheet("font-size: 14px;")
         self.baud_combo_dialog = QComboBox()
         self.baud_combo_dialog.setStyleSheet("background-color: #5A5A5A; border: none; border-radius: 5px; color: #FFFFFF;")
-        baudrates = [9600, 19200, 38400, 57600, 115200]
+        baudrates = [57600, 115200]
         self.baud_combo_dialog.addItems([str(b) for b in baudrates])
-        self.baud_combo_dialog.setCurrentText(str(self.serial_coms.baudrate))
+        self.baud_combo_dialog.setCurrentText(str(self.serial_coms.baudrate) if self.serial_coms.baudrate else "57600")
         baud_layout.addWidget(baud_label)
         baud_layout.addWidget(self.baud_combo_dialog)
         layout.addLayout(baud_layout)
@@ -427,19 +447,21 @@ class MainWindow(QMainWindow):
     def update_connection_indicator(self):
         """Update the visual indicator of the connection status."""
         if self.connected:
-            self.connection_indicator_top.setText("Connection: <span style='color: green;'>⬤</span>")
+            self.connection_indicator_top.setText("Connection:   <span style='color: green;'>⬤</span>")
         else:
-            self.connection_indicator_top.setText("Connection: <span style='color: red;'>⬤</span>")
+            self.connection_indicator_top.setText("Connection:   <span style='color: red;'>⬤</span>")
 
     def update_latency_display(self, latency):
         """Update the latency display in the connection settings."""
-        if hasattr(self, 'latency_display_label'):
-            self.latency_display_label.setText(f"{latency:.2f} ms")
+        if hasattr(self, 'connection_settings_dialog') and self.connection_settings_dialog.isVisible():
+            if hasattr(self, 'latency_display_label'):
+                self.latency_display_label.setText(f"{latency:.2f} ms")
 
     def on_connected(self):
         """Handle actions when a serial connection is established."""
         self.connected = True
         self.update_connection_indicator()
+        self.update_connection_indicator_dialog()
         if hasattr(self, 'connection_button_dialog') and self.connection_button_dialog:
             try:
                 self.connection_button_dialog.setText("Disconnect")
@@ -453,6 +475,7 @@ class MainWindow(QMainWindow):
         """Handle actions when the serial connection is lost or closed."""
         self.connected = False
         self.update_connection_indicator()
+        self.update_connection_indicator_dialog()
         if hasattr(self, 'connection_button_dialog') and self.connection_button_dialog:
             try:
                 self.connection_button_dialog.setText("Connect")
@@ -466,10 +489,16 @@ class MainWindow(QMainWindow):
 
     def on_error(self, message):
         """Handle errors emitted from the SerialComs module."""
-        if hasattr(self, 'connection_indicator'):
-            self.update_connection_indicator()
+        self.update_connection_indicator()
         QMessageBox.critical(self, "Serial Error", message)
         self.connected = False
+        self.update_connection_indicator_dialog()
+        if hasattr(self, 'connection_button_dialog') and self.connection_button_dialog:
+            try:
+                self.connection_button_dialog.setText("Connect")
+                self.connection_button_dialog.setEnabled(True)
+            except RuntimeError:
+                pass  # The button has been deleted
         self.update_buttons_state()
         # Reset Auto Adjust to default state
         self.reset_auto_adjust()
@@ -478,6 +507,18 @@ class MainWindow(QMainWindow):
         """Handle data received from the serial connection."""
         # Handle received data if needed
         print(f"Data received: {data}")
+
+    def update_average_range(self, average):
+        """Update the average processed range display."""
+        self.average_range_label.setText(f"Average Processed Range: {average}")
+
+    def update_encoder_value(self, encoder_value):
+        """Update the encoder value display."""
+        self.encoder_value_label.setText(f"Encoder Value: {encoder_value}")
+
+    def update_extension_state(self, extension_state):
+        """Update the current extension state display."""
+        self.extension_state_label.setText(f"Current Extension State: {extension_state}")
 
     def update_slider_settings(self, min_input, max_input, step_input, dialog):
         """Update slider settings based on user input."""
@@ -536,7 +577,7 @@ class MainWindow(QMainWindow):
     def extend_button_clicked(self):
         """Send the 'EXTEND' command over serial and update button styles."""
         if self.connected:
-            self.serial_coms.send_data("EXTEND")
+            self.serial_coms.send_data("Extend")
             # Update Extend button style to indicate active state
             self.bottom_button2.setStyleSheet("""
                 QPushButton { 
@@ -546,7 +587,7 @@ class MainWindow(QMainWindow):
                     font-size: 16px; 
                     color: #FFFFFF; 
                 } 
-                QPushButton::Hover { 
+                QPushButton::hover { 
                     background-color: #007500; 
                 } 
                 QPushButton::pressed { 
@@ -562,7 +603,7 @@ class MainWindow(QMainWindow):
                     font-size: 16px; 
                     color: #FFFFFF; 
                 } 
-                QPushButton::Hover { 
+                QPushButton::hover { 
                     background-color: #6A6A6A; 
                 } 
                 QPushButton::pressed { 
@@ -577,7 +618,7 @@ class MainWindow(QMainWindow):
     def retract_button_clicked(self):
         """Send the 'RETRACT' command over serial and update button styles."""
         if self.connected:
-            self.serial_coms.send_data("RETRACT")
+            self.serial_coms.send_data("Retract")
             # Update Retract button style to indicate active state
             self.bottom_button1.setStyleSheet("""
                 QPushButton { 
@@ -587,7 +628,7 @@ class MainWindow(QMainWindow):
                     font-size: 16px; 
                     color: #FFFFFF; 
                 } 
-                QPushButton::Hover { 
+                QPushButton::hover { 
                     background-color: #9C0000; 
                 } 
                 QPushButton::pressed { 
@@ -603,7 +644,7 @@ class MainWindow(QMainWindow):
                     font-size: 16px; 
                     color: #FFFFFF; 
                 } 
-                QPushButton::Hover { 
+                QPushButton::hover { 
                     background-color: #6A6A6A; 
                 } 
                 QPushButton::pressed { 
@@ -624,7 +665,7 @@ class MainWindow(QMainWindow):
     def stop_all_buttons(self):
         """Send the 'STOP' command and reset all buttons to their default state."""
         if self.connected:
-            self.serial_coms.send_data("STOP")
+            self.serial_coms.send_data("Stop")
             # Reset Auto Adjust button
             self.reset_auto_adjust()
 
@@ -637,7 +678,7 @@ class MainWindow(QMainWindow):
                     font-size: 16px; 
                     color: #FFFFFF; 
                 } 
-                QPushButton::Hover { 
+                QPushButton::hover { 
                     background-color: #6A6A6A; 
                 } 
                 QPushButton::pressed { 
@@ -652,7 +693,7 @@ class MainWindow(QMainWindow):
                     font-size: 16px; 
                     color: #FFFFFF; 
                 } 
-                QPushButton::Hover { 
+                QPushButton::hover { 
                     background-color: #6A6A6A; 
                 } 
                 QPushButton::pressed { 
@@ -695,51 +736,9 @@ class MainWindow(QMainWindow):
         self.stop_webcam()
         event.accept()
 
-    # SerialComs signal handlers
-    def on_connected(self):
-        """Handle actions when a serial connection is established."""
-        self.connected = True
-        self.update_connection_indicator()
-        if hasattr(self, 'connection_button_dialog') and self.connection_button_dialog:
-            try:
-                self.connection_button_dialog.setText("Disconnect")
-                self.connection_button_dialog.setEnabled(True)
-            except RuntimeError:
-                pass  # The button has been deleted
-        self.update_buttons_state()
-        QMessageBox.information(self, "Connected", f"Connected to {self.serial_coms.port} at {self.serial_coms.baudrate} baud.")
+    # SerialComs signal handlers are already connected in __init__
 
-    def on_disconnected(self):
-        """Handle actions when the serial connection is lost or closed."""
-        self.connected = False
-        self.update_connection_indicator()
-        if hasattr(self, 'connection_button_dialog') and self.connection_button_dialog:
-            try:
-                self.connection_button_dialog.setText("Connect")
-                self.connection_button_dialog.setEnabled(True)
-            except RuntimeError:
-                pass  # The button has been deleted
-        self.update_buttons_state()
-        QMessageBox.warning(self, "Disconnected", "Serial connection has been disconnected.")
-        # Reset Auto Adjust to default state
-        self.reset_auto_adjust()
-
-    def on_error(self, message):
-        """Handle errors emitted from the SerialComs module."""
-        if hasattr(self, 'connection_indicator'):
-            self.update_connection_indicator()
-        QMessageBox.critical(self, "Serial Error", message)
-        self.connected = False
-        self.update_buttons_state()
-        # Reset Auto Adjust to default state
-        self.reset_auto_adjust()
-
-    def on_data_received(self, data):
-        """Handle data received from the serial connection."""
-        # Handle received data if needed
-        print(f"Data received: {data}")
-
-# Application setup
+    # Application setup
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
