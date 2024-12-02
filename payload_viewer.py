@@ -2,18 +2,37 @@
 
 import sys
 import cv2
+import os
+from datetime import datetime
 import numpy as np
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QMenuBar, QMenu,
     QPushButton, QLabel, QSlider, QStackedWidget, QFrame, QDialog, QFormLayout, 
-    QLineEdit, QDialogButtonBox, QMessageBox, QComboBox
+    QLineEdit, QDialogButtonBox, QMessageBox, QComboBox, QGridLayout, QScrollArea
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QAction
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtCore import QUrl
 
+from PIL import Image
+from PIL.ExifTags import TAGS, GPSTAGS
+
 from serialcoms import SerialComs
+
+class ImageLoaderThread(QThread):
+    images_loaded = pyqtSignal(list)  # Signal to send loaded images back to the UI
+
+    def __init__(self, images_dir):
+        super().__init__()
+        self.images_dir = images_dir
+
+    def run(self):
+        image_files = [
+            f for f in os.listdir(self.images_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+        ]
+        # Emit the image file paths back to the main thread
+        self.images_loaded.emit(image_files)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -52,9 +71,53 @@ class MainWindow(QMainWindow):
         self.view_stack.addWidget(self.map_view)
 
         # Images view
-        self.images_view = QLabel("Images View")
-        self.images_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.view_stack.addWidget(self.images_view)
+        self.images_view_container = QWidget()
+        self.images_view_layout = QVBoxLayout(self.images_view_container)
+        self.images_view_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        self.gallery_grid = QGridLayout()
+        self.gallery_grid.setSpacing(10)
+
+        # Scroll Area for the gallery
+        self.gallery_scroll_area = QScrollArea()
+        self.gallery_scroll_area.setWidgetResizable(True)
+        self.gallery_content = QWidget()
+        self.gallery_content.setLayout(self.gallery_grid)
+        self.gallery_scroll_area.setWidget(self.gallery_content)
+        self.gallery_scroll_area.setStyleSheet("""
+            QScrollBar:vertical {
+                background: #2E2E2E;
+                width: 12px;
+                margin: 0px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #FFFFFF;  /* White color for the scrollbar handle */
+                min-height: 20px;
+                border-radius: 6px;  /* Rounded corners */
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #CCCCCC;  /* Light gray on hover */
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                border: none;
+                background: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
+        """)
+
+        # Add the gallery to the layout
+        self.images_view_layout.addWidget(self.gallery_scroll_area)
+        self.view_stack.addWidget(self.images_view_container)
+
+        # Load images from /images directory
+        self.load_gallery_images()
+
+        # Timer for periodic folder checking
+        self.image_check_timer = QTimer()
+        self.image_check_timer.timeout.connect(self.load_gallery_images)
 
         # Current view label
         self.current_view_label = QLabel("Current View: Webcam")
@@ -277,10 +340,17 @@ class MainWindow(QMainWindow):
         self.view_stack.setCurrentIndex(index)
         view_names = ["Webcam", "Map", "Images"]
         self.current_view_label.setText(f"Current View: {view_names[index]}")
+
         if index == 0:  # Webcam view
             self.start_webcam()
-        else:
+            self.image_check_timer.stop()
+        elif index == 2:  # Images View
+            self.load_gallery_images()  # Reload gallery on entering Images View
+            self.image_check_timer.start(30000)  # Check for new images every 30 seconds
             self.stop_webcam()
+        else:  # Map view or other views
+            self.stop_webcam()
+            self.image_check_timer.stop()
 
     def start_webcam(self):
         """Start the webcam feed."""
@@ -309,6 +379,189 @@ class MainWindow(QMainWindow):
                 image = QImage(frame, frame.shape[1], frame.shape[0], QImage.Format.Format_RGB888)
                 pixmap = QPixmap.fromImage(image).scaled(1280, 720, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 self.webcam_view.setPixmap(pixmap)
+
+    def get_exif_data(self, image_path):
+        """Extract EXIF data from an image."""
+        try:
+            image = Image.open(image_path)
+            exif_data = image._getexif() or {}
+            parsed_exif = {}
+            
+            # Map EXIF data to readable tags
+            for tag, value in exif_data.items():
+                tag_name = TAGS.get(tag, tag)
+                parsed_exif[tag_name] = value
+
+            # Parse GPS data if available
+            gps_data = parsed_exif.get("GPSInfo")
+            if gps_data:
+                gps_info = {}
+                for key, val in gps_data.items():
+                    decoded = GPSTAGS.get(key, key)
+                    gps_info[decoded] = val
+                parsed_exif["GPSInfo"] = gps_info
+
+            return parsed_exif
+        except Exception as e:
+            print(f"Error reading EXIF data: {e}")
+            return {}
+
+    def parse_exif_data(self, exif_data):
+        """Extract relevant EXIF fields (date, time, and GPS coordinates)."""
+        # Get date/time
+        date_time = exif_data.get("DateTime", "Not Found")
+
+        # Extract GPS coordinates if available
+        gps_info = exif_data.get("GPSInfo", {})
+        if gps_info:
+            def convert_to_degrees(value):
+                """Convert GPS coordinate to degrees."""
+                d, m, s = value
+                return d + (m / 60.0) + (s / 3600.0)
+
+            latitude = gps_info.get("GPSLatitude")
+            latitude_ref = gps_info.get("GPSLatitudeRef", "")
+            longitude = gps_info.get("GPSLongitude")
+            longitude_ref = gps_info.get("GPSLongitudeRef", "")
+
+            if latitude and longitude and latitude_ref and longitude_ref:
+                lat = convert_to_degrees(latitude)
+                lon = convert_to_degrees(longitude)
+                if latitude_ref != "N":
+                    lat = -lat
+                if longitude_ref != "E":
+                    lon = -lon
+                gps_coordinates = f"{lat:.6f}, {lon:.6f}"
+            else:
+                gps_coordinates = "Not Found"
+        else:
+            gps_coordinates = "Not Found"
+
+        return date_time, gps_coordinates
+
+
+    def load_gallery_images(self):
+        """Load images from the /images directory using a separate thread."""
+        images_dir = "images"  # Directory containing images
+        if not os.path.exists(images_dir):
+            os.makedirs(images_dir)  # Create the directory if it doesn't exist
+
+        # Stop any running thread before starting a new one
+        if hasattr(self, "image_loader_thread") and self.image_loader_thread.isRunning():
+            self.image_loader_thread.terminate()
+
+        # Start a new thread to load images
+        self.image_loader_thread = ImageLoaderThread(images_dir)
+        self.image_loader_thread.images_loaded.connect(self.update_gallery)  # Connect to update UI
+        self.image_loader_thread.start()
+
+    def update_gallery(self, image_files):
+        """Update the gallery UI with the loaded images."""
+        # Clear the current grid to avoid duplicates
+        while self.gallery_grid.count():
+            widget = self.gallery_grid.takeAt(0).widget()
+            if widget:
+                widget.deleteLater()
+
+        if not image_files:
+            no_images_label = QLabel("No images found")
+            no_images_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            no_images_label.setStyleSheet("font-size: 16px; color: #FFFFFF;")
+            self.gallery_grid.addWidget(no_images_label, 0, 0, 1, 5)
+            return
+
+        # Add images in a fixed 5x5 grid layout
+        rows = max(len(image_files) // 5 + (1 if len(image_files) % 5 else 0), 5)
+        for row in range(rows):
+            for col in range(5):
+                index = row * 5 + col
+                if index < len(image_files):
+                    image_path = os.path.join("images", image_files[index])
+                    thumbnail = QLabel()
+                    pixmap = QPixmap(image_path).scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio,
+                                                        Qt.TransformationMode.SmoothTransformation)
+                    thumbnail.setPixmap(pixmap)
+                    thumbnail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    thumbnail.setStyleSheet("border: 1px solid #5A5A5A; border-radius: 5px;")
+                    thumbnail.mousePressEvent = lambda e, p=image_path: self.show_image_details(p)
+                    self.gallery_grid.addWidget(thumbnail, row, col)
+                else:
+                    # Add an empty placeholder to maintain the grid structure
+                    placeholder = QLabel()
+                    placeholder.setFixedSize(150, 150)
+                    self.gallery_grid.addWidget(placeholder, row, col)
+
+    def show_image_details(self, image_path):
+        """Show details of a clicked image including date, time, and GPS from EXIF data."""
+        # Extract EXIF data
+        exif_data = self.get_exif_data(image_path)
+        date_time, gps_coordinates = self.parse_exif_data(exif_data)
+
+        # Display dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Image Details")
+        dialog.setStyleSheet("background-color: #3A3A3A; color: #FFFFFF; border-radius: 10px; padding: 10px;")
+
+        layout = QHBoxLayout(dialog)
+
+        # Left: Display image (3/4 of the width)
+        image_layout = QVBoxLayout()
+        image_label = QLabel()
+        pixmap = QPixmap(image_path).scaled(800, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        image_label.setPixmap(pixmap)
+        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image_layout.addWidget(image_label)
+        layout.addLayout(image_layout, 3)
+
+        # Right: Details (1/4 of the width)
+        details_layout = QVBoxLayout()
+
+        # Date and time of capture
+        capture_time_label = QLabel(f"Capture Time: {date_time}")
+        capture_time_label.setStyleSheet("font-size: 14px; color: #FFFFFF;")
+        details_layout.addWidget(capture_time_label)
+
+        # GPS coordinates
+        gps_label = QLabel(f"GPS Coordinates: {gps_coordinates}")
+        gps_label.setStyleSheet("font-size: 14px; color: #FFFFFF;")
+        details_layout.addWidget(gps_label)
+
+        # Mini map view (cleaner OpenStreetMap view)
+        if gps_coordinates != "Not Found":
+            lat, lon = map(float, gps_coordinates.split(", "))
+            map_url = f"https://www.openstreetmap.org/export/embed.html?bbox={lon - 0.005}," \
+                    f"{lat - 0.005},{lon + 0.005},{lat + 0.005}&layer=map&marker={lat},{lon}"
+        else:
+            map_url = "https://www.openstreetmap.org"
+        map_view = QWebEngineView()
+        map_view.setUrl(QUrl(map_url))
+        map_view.setFixedHeight(300)
+        map_view.setFixedWidth(300)
+        details_layout.addWidget(map_view)
+
+        # Add Close button
+        close_button = QPushButton("Close")
+        close_button.setStyleSheet("""
+            QPushButton {
+                background-color: #5A5A5A;
+                border: none;
+                border-radius: 5px;
+                font-size: 16px;
+                color: #FFFFFF;
+            }
+            QPushButton::hover {
+                background-color: #6A6A6A;
+            }
+            QPushButton::pressed {
+                background-color: #4A4A4A;
+            }
+        """)
+        close_button.clicked.connect(dialog.accept)
+        details_layout.addWidget(close_button)
+
+        layout.addLayout(details_layout, 1)
+        dialog.setLayout(layout)
+        dialog.exec()
 
     def open_slider_settings_dialog(self):
         """Open a dialog to adjust slider settings."""
