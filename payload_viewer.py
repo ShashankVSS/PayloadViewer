@@ -19,11 +19,13 @@ from PyQt6.QtCore import QUrl
 from PyQt6.QtWebChannel import QWebChannel  # *** Changed ***
 from PyQt6.QtCore import QObject, pyqtSlot  # *** Changed ***
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from PIL.ExifTags import TAGS, GPSTAGS
 
 import folium  # Added for map generation
 from io import BytesIO  # To handle HTML in memory
+
+import piexif  # *** Added for EXIF manipulation ***
 
 from serialcoms import SerialComs
 
@@ -64,6 +66,11 @@ class ImageLoaderThread(QThread):
 
 
 class MainWindow(QMainWindow):
+    # Define default GPS coordinates
+    DEFAULT_LAT = 44.04964
+    DEFAULT_LON = -79.48114
+    DEFAULT_ALT = 0.0  # Default altitude in meters
+
     def __init__(self):
         super().__init__()
         
@@ -182,7 +189,7 @@ class MainWindow(QMainWindow):
         self.serial_coms.encoder_position_received.connect(self.update_encoder_value)
         self.serial_coms.extension_state_received.connect(self.update_extension_state)
         # Removed incorrect signal assignment
-        self.serial_coms.detection_received.connect(self.on_detection_received)  # *** Connect detection signal ***
+        self.serial_coms.detection_received.connect(self.handle_metal_detected)  # *** Connect detection signal to unified handler ***
 
         # Define connection state
         self.connected = False
@@ -977,10 +984,97 @@ class MainWindow(QMainWindow):
         # Handle received data if needed
         print(f"Data received: {data}")
 
-    def on_detection_received(self, detection_info):
-        """Handle detection events received from serial communication."""
-        self.status_label.setText(f"Status: Detection - {detection_info}")
-        self.save_image_with_gps(detection_info)
+    # *** Unified Handle Detection Function ***
+    def handle_metal_detected(self, detection_info=None):
+        """Handle metal detection events from key press or serial communication."""
+        status_text = "Metal Detected" if detection_info is None else f"Metal Detected - {detection_info}"
+        self.metal_detected_label.setText(status_text)
+        self.metal_detected_label.show()
+        # Hide the message after 3 seconds
+        QTimer.singleShot(3000, self.metal_detected_label.hide)
+
+        # Save the current frame from the webcam with GPS data
+        if self.current_frame is not None:
+            images_dir = "images"
+            if not os.path.exists(images_dir):
+                os.makedirs(images_dir)  # Create the directory if it doesn't exist
+
+            # Generate a unique filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"metal_detected_{timestamp}.jpg"
+            image_path = os.path.join(images_dir, filename)
+
+            # Get current GPS data from MAVLink
+            gps_data = self.get_current_gps()
+
+            # Determine whether to use MAVLink GPS data or default coordinates
+            if gps_data.startswith("GPS: Lat"):
+                try:
+                    _, lat_str, lon_str, alt_str = gps_data.split()
+                    lat = float(lat_str.strip(','))  # Assuming format "GPS: Lat X, Lon Y, Alt Zm"
+                    lon = float(lon_str.strip(',')) 
+                    alt = float(alt_str.strip('m'))
+                except ValueError:
+                    print(f"Invalid GPS data format: {gps_data}")
+                    lat = self.DEFAULT_LAT
+                    lon = self.DEFAULT_LON
+                    alt = self.DEFAULT_ALT
+            else:
+                lat = self.DEFAULT_LAT
+                lon = self.DEFAULT_LON
+                alt = self.DEFAULT_ALT
+
+            # Convert OpenCV image (BGR) to PIL image (RGB)
+            frame_rgb = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(frame_rgb)
+
+            # Embed EXIF data with GPS information
+            exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+
+            # Add DateTime
+            exif_dict['0th'][piexif.ImageIFD.DateTime] = datetime.now().strftime("%Y:%m:%d %H:%M:%S")
+
+            # Add GPS data
+            exif_dict["GPS"] = self.convert_gps_to_exif(lat, lon, alt)
+
+            # Convert exif_dict to bytes
+            exif_bytes = piexif.dump(exif_dict)
+
+            # Save image with EXIF data
+            try:
+                pil_image.save(image_path, "JPEG", exif=exif_bytes)
+                QMessageBox.information(self, "Image Saved", f"Image saved as {image_path} with EXIF GPS data.")
+            except Exception as e:
+                QMessageBox.critical(self, "Save Error", f"Failed to save image: {e}")
+        else:
+            QMessageBox.warning(self, "No Frame", "No frame available to save.")
+    # *** End of Unified Handle Detection Function ***
+
+    def convert_gps_to_exif(self, lat, lon, alt):
+        """Convert latitude, longitude, and altitude to EXIF GPS format."""
+        def to_deg(value):
+            """Convert decimal degrees to degrees, minutes, seconds tuple."""
+            d = int(abs(value))
+            m = int((abs(value) - d) * 60)
+            s = int((((abs(value) - d) * 60) - m) * 60 * 100)
+            return ((d, 1), (m, 1), (s, 100))
+
+        gps_ifd = {}
+        if lat >= 0:
+            gps_ifd[piexif.GPSIFD.GPSLatitudeRef] = 'N'
+        else:
+            gps_ifd[piexif.GPSIFD.GPSLatitudeRef] = 'S'
+        if lon >= 0:
+            gps_ifd[piexif.GPSIFD.GPSLongitudeRef] = 'E'
+        else:
+            gps_ifd[piexif.GPSIFD.GPSLongitudeRef] = 'W'
+
+        gps_ifd[piexif.GPSIFD.GPSLatitude] = to_deg(lat)
+        gps_ifd[piexif.GPSIFD.GPSLongitude] = to_deg(lon)
+        gps_ifd[piexif.GPSIFD.GPSAltitudeRef] = 0 if alt >=0 else 1
+        gps_ifd[piexif.GPSIFD.GPSAltitude] = (int(abs(alt)*100), 100)
+
+        return gps_ifd
 
     def update_average_range(self, average):
         """Update the average processed range display."""
@@ -1100,48 +1194,16 @@ class MainWindow(QMainWindow):
 
     # *** End of Added Section ***
 
-    # *** Removed Method to View Full Screen ***
-    # The view_full_screen method is no longer needed and has been removed.
-    # *** End of Removed Section ***
-
-    # *** Added Key Press Event Handling for Image Save Debugging ***
-    # def keyPressEvent(self, event):
-    #     """Override the key press event to detect backtick key."""
-    #     # Optional: Uncomment the next line for debugging key presses
-    #     # print(f"Key Pressed: '{event.text()}' (Key Code: {event.key()})")
+    # *** Added Key Press Event Handling ***
+    def keyPressEvent(self, event):
+        """Override the key press event to detect backtick key."""
+        # Optional: Uncomment the next line for debugging key presses
+        # print(f"Key Pressed: '{event.text()}' (Key Code: {event.key()})")
         
-    #     if event.text() == '`':  # Detect backtick key (`) press
-    #         self.handle_metal_detected()
-    #     else:
-    #         super().keyPressEvent(event)
-
-    def handle_metal_detected(self):
-        """Handle the metal detection event triggered by backtick key."""
-        # Display the "Metal Detected" message
-        self.metal_detected_label.setText("Metal Detected")
-        self.metal_detected_label.show()
-        # Hide the message after 3 seconds
-        QTimer.singleShot(3000, self.metal_detected_label.hide)
-
-        # Save the current frame from the webcam
-        if self.current_frame is not None:
-            images_dir = "images"
-            if not os.path.exists(images_dir):
-                os.makedirs(images_dir)  # Create the directory if it doesn't exist
-
-            # Generate a unique filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"metal_detected_{timestamp}.png"
-            image_path = os.path.join(images_dir, filename)
-
-            # Save the image using OpenCV
-            try:
-                cv2.imwrite(image_path, self.current_frame)
-                # QMessageBox.information(self, "Image Saved", f"Image saved to {image_path}")
-            except Exception as e:
-                QMessageBox.critical(self, "Save Error", f"Failed to save image: {e}")
+        if event.text() == '`':  # Detect backtick key (`) press
+            self.handle_metal_detected()
         else:
-            QMessageBox.warning(self, "No Frame", "No frame available to save.")
+            super().keyPressEvent(event)
     # *** End of Added Section ***
 
     # Button and slider functions
@@ -1348,214 +1410,89 @@ class MainWindow(QMainWindow):
         event.accept()
 
     # *** Added Handle Detection and Save Image with GPS ***
-    def save_image_with_gps(self, detection_info):
-        """Capture image from webcam, embed GPS data, and save."""
-        if self.current_frame is None:
-            QMessageBox.warning(self, "No Frame", "No frame available to save.")
-            return
-
-        # Get current GPS data
-        gps_data = self.get_current_gps()
-
-        # Convert OpenCV image (BGR) to PIL image (RGB)
-        frame_rgb = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(frame_rgb)
-
-        # Draw GPS data and detection info on the image
-        draw = ImageDraw.Draw(pil_image)
-        try:
-            font = ImageFont.truetype("arial.ttf", 20)
-        except IOError:
-            font = ImageFont.load_default()
-
-        text = f"{gps_data}\nDetection: {detection_info}"
-        draw.text((10, 10), text, fill="red", font=font)
-
-        # Define save directory
-        save_dir = "captured_images"
-        os.makedirs(save_dir, exist_ok=True)
-
-        # Define filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{save_dir}/detection_{timestamp}.jpg"
-        image_path = os.path.join(save_dir, filename)
-
-        # Save image
-        try:
-            pil_image.save(filename)
-            QMessageBox.information(self, "Image Saved", f"Image saved as {filename}")
-        except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Failed to save image: {e}")
-    # *** End of Added Section ***
-
-    # *** Added MAVLink Connection Handling ***
-    def open_mavlink_settings_dialog(self):
-        """Open a dialog to manage MAVLink connection settings."""
-        self.mavlink_settings_dialog = QDialog(self)
-        dialog = self.mavlink_settings_dialog  # Alias for convenience
-        dialog.setWindowTitle("MAVLink Settings")
-        dialog.setStyleSheet("background-color: #3A3A3A; color: #FFFFFF; border-radius: 10px; padding: 10px;")
-
-        layout = QVBoxLayout(dialog)
-
-        # MAVLink IP input
-        mav_ip_layout = QHBoxLayout()
-        mav_ip_label = QLabel("MAVLink IP:")
-        mav_ip_label.setStyleSheet("font-size: 14px;")
-        self.mav_ip_input_dialog = QLineEdit("udp:127.0.0.1:14550")  # Default MAVLink IP
-        self.mav_ip_input_dialog.setStyleSheet("background-color: #5A5A5A; border: none; border-radius: 5px; color: #FFFFFF;")
-        mav_ip_layout.addWidget(mav_ip_label)
-        mav_ip_layout.addWidget(self.mav_ip_input_dialog)
-        layout.addLayout(mav_ip_layout)
-
-        # Connection indicator
-        self.mavlink_connection_indicator_dialog = QLabel()
-        self.update_mavlink_connection_indicator_dialog()
-        self.mavlink_connection_indicator_dialog.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.mavlink_connection_indicator_dialog)
-
-        # Connect/Disconnect button
-        self.mavlink_connection_button_dialog = QPushButton("Connect" if not self.mav_connected else "Disconnect")
-        self.mavlink_connection_button_dialog.setFixedHeight(50)
-        self.mavlink_connection_button_dialog.setStyleSheet("""
-            QPushButton { 
-                background-color: #5A5A5A; 
-                border: none; 
-                border-radius: 5px; 
-                font-size: 16px; 
-                color: #FFFFFF; 
-            } 
-            QPushButton::pressed { 
-                background-color: #4A4A4A; 
-            }
-        """)
-        self.mavlink_connection_button_dialog.clicked.connect(self.toggle_mavlink_connection_dialog)
-        layout.addWidget(self.mavlink_connection_button_dialog)
-
-        dialog.setLayout(layout)
-        dialog.exec()
-
-    def toggle_mavlink_connection_dialog(self):
-        """Connect or disconnect based on current state from the MAVLink settings dialog."""
-        if not self.mav_connected:
-            # Get MAVLink IP
-            mav_ip = self.mav_ip_input_dialog.text().strip()
-            if not mav_ip:
-                QMessageBox.warning(self, "Input Error", "Please enter a valid MAVLink IP.")
-                return
-            self.connect_mavlink(mav_ip)
-            self.mavlink_connection_button_dialog.setEnabled(False)  # Disable to prevent multiple clicks
-        else:
-            self.disconnect_mavlink()
-
-    def connect_mavlink(self, mav_ip):
-        """Establish a MAVLink connection."""
-        try:
-            self.mav = mavutil.mavlink_connection(mav_ip)
-            self.mav.wait_heartbeat(timeout=5)
-            self.mav_connected = True
-            self.update_mavlink_connection_indicator_dialog()
-            self.mavlink_connection_button_dialog.setText("Disconnect")
-            QMessageBox.information(self, "MAVLink Connected", f"Connected to MAVLink on {mav_ip}")
-        except Exception as e:
-            QMessageBox.warning(self, "MAVLink Connection Error", f"Failed to connect to MAVLink: {e}")
-            self.mav_connected = False
-            self.update_mavlink_connection_indicator_dialog()
-            self.mavlink_connection_button_dialog.setEnabled(True)
-
-    def disconnect_mavlink(self):
-        """Disconnect the MAVLink connection."""
-        if self.mav:
-            self.mav.close()
-            self.mav = None
-        self.mav_connected = False
-        self.update_mavlink_connection_indicator_dialog()
-        self.mavlink_connection_button_dialog.setText("Connect")
-        QMessageBox.information(self, "MAVLink Disconnected", "Disconnected from MAVLink.")
-        self.mavlink_connection_button_dialog.setEnabled(True)
-
-    def update_mavlink_connection_indicator_dialog(self):
-        """Update the visual indicator of the MAVLink connection status in the dialog."""
-        if self.mav_connected:
-            self.mavlink_connection_indicator_dialog.setText("MAVLink Connection: <span style='color: green;'>⬤</span>")
-        else:
-            self.mavlink_connection_indicator_dialog.setText("MAVLink Connection: <span style='color: red;'>⬤</span>")
-    # *** End of Added Section ***
-
-    # *** Added Handle Detection and Save Image with GPS ***
-    def save_image_with_gps(self, detection_info):
-        """Capture image from webcam, embed GPS data, and save."""
-        if self.current_frame is None:
-            QMessageBox.warning(self, "No Frame", "No frame available to save.")
-            return
-
-        # Get current GPS data
-        gps_data = self.get_current_gps()
-
-        # Convert OpenCV image (BGR) to PIL image (RGB)
-        frame_rgb = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(frame_rgb)
-
-        # Draw GPS data and detection info on the image
-        draw = ImageDraw.Draw(pil_image)
-        try:
-            font = ImageFont.truetype("arial.ttf", 20)
-        except IOError:
-            font = ImageFont.load_default()
-
-        text = f"{gps_data}\nDetection: {detection_info}"
-        draw.text((10, 10), text, fill="red", font=font)
-
-        # Define save directory
-        save_dir = "captured_images"
-        os.makedirs(save_dir, exist_ok=True)
-
-        # Define filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{save_dir}/detection_{timestamp}.jpg"
-        image_path = os.path.join(save_dir, filename)
-
-        # Save image
-        try:
-            pil_image.save(filename)
-            QMessageBox.information(self, "Image Saved", f"Image saved as {filename}")
-        except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Failed to save image: {e}")
-    # *** End of Added Section ***
-
     def get_current_gps(self):
-        """Fetch current GPS coordinates from MAVLink."""
-        if not self.mav_connected or not self.mav:
-            return "GPS: Unknown"
+        """Fetch current GPS data from MAVLink."""
+        if self.mav and self.mav_connected:
+            try:
+                # Attempt to receive a GPS_RAW_INT message without blocking
+                msg = self.mav.recv_match(type='GPS_RAW_INT', blocking=False)
+                if msg:
+                    lat = msg.lat / 1e7  # Latitude in degrees
+                    lon = msg.lon / 1e7  # Longitude in degrees
+                    alt = msg.alt / 1000.0  # Altitude in meters
+                    return f"GPS: Lat {lat}, Lon {lon}, Alt {alt}m"
+                else:
+                    return "GPS: No Data"
+            except Exception as e:
+                return f"GPS: Error - {e}"
+        else:
+            return "GPS: No Connection"
 
-        try:
-            msg = self.mav.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=1)
-            if msg:
-                lat = msg.lat / 1e7  # Convert to degrees
-                lon = msg.lon / 1e7
-                alt = msg.alt / 1000  # Convert to meters
-                return f"GPS: Lat {lat:.6f}, Lon {lon:.6f}, Alt {alt:.2f}m"
+    def handle_metal_detected(self, detection_info=None):
+        """Handle metal detection events from key press or serial communication."""
+        status_text = "Metal Detected" if detection_info is None else f"Metal Detected - {detection_info}"
+        self.metal_detected_label.setText(status_text)
+        self.metal_detected_label.show()
+        # Hide the message after 3 seconds
+        QTimer.singleShot(3000, self.metal_detected_label.hide)
+
+        # Save the current frame from the webcam with GPS data
+        if self.current_frame is not None:
+            images_dir = "images"
+            if not os.path.exists(images_dir):
+                os.makedirs(images_dir)  # Create the directory if it doesn't exist
+
+            # Generate a unique filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"metal_detected_{timestamp}.jpg"
+            image_path = os.path.join(images_dir, filename)
+
+            # Get current GPS data from MAVLink
+            gps_data = self.get_current_gps()
+
+            # Determine whether to use MAVLink GPS data or default coordinates
+            if gps_data.startswith("GPS: Lat"):
+                try:
+                    _, lat_str, lon_str, alt_str = gps_data.split()
+                    lat = float(lat_str.strip(','))  # Assuming format "GPS: Lat X, Lon Y, Alt Zm"
+                    lon = float(lon_str.strip(',')) 
+                    alt = float(alt_str.strip('m'))
+                except ValueError:
+                    print(f"Invalid GPS data format: {gps_data}")
+                    lat = self.DEFAULT_LAT
+                    lon = self.DEFAULT_LON
+                    alt = self.DEFAULT_ALT
             else:
-                return "GPS: No Data"
-        except Exception as e:
-            return f"GPS: Error - {e}"
+                lat = self.DEFAULT_LAT
+                lon = self.DEFAULT_LON
+                alt = self.DEFAULT_ALT
 
+            # Convert OpenCV image (BGR) to PIL image (RGB)
+            frame_rgb = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(frame_rgb)
+
+            # Embed EXIF data with GPS information
+            exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+
+            # Add DateTime
+            exif_dict['0th'][piexif.ImageIFD.DateTime] = datetime.now().strftime("%Y:%m:%d %H:%M:%S")
+
+            # Add GPS data
+            exif_dict["GPS"] = self.convert_gps_to_exif(lat, lon, alt)
+
+            # Convert exif_dict to bytes
+            exif_bytes = piexif.dump(exif_dict)
+
+            # Save image with EXIF data
+            try:
+                pil_image.save(image_path, "JPEG", exif=exif_bytes)
+                QMessageBox.information(self, "Image Saved", f"Image saved as {image_path} with EXIF GPS data.")
+            except Exception as e:
+                QMessageBox.critical(self, "Save Error", f"Failed to save image: {e}")
+        else:
+            QMessageBox.warning(self, "No Frame", "No frame available to save.")
     # *** End of Added Section ***
 
-    # *** Added Handle Detection and Save Image with GPS ***
-    def on_detection_received(self, detection_info):
-        """Handle detection events received from serial communication."""
-        self.status_label.setText(f"Status: Detection - {detection_info}")
-        self.save_image_with_gps(detection_info)
-    # *** End of Added Section ***
-
-    # *** Removed Method to View Full Screen ***
-    # The view_full_screen method is no longer needed and has been removed.
-    # *** End of Removed Section ***
-
-    # *** Added Key Press Event Handling ***
-    # (Already included above)
-    # *** End of Added Section ***
 
     # SerialComs signal handlers are already connected in __init__
 
