@@ -4,13 +4,12 @@ import serial
 import serial.tools.list_ports
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, QTimer
 from time import perf_counter
-import ast  # Added for parsing
-import math  # Added for checking inf, -inf, and nan
+import ast  # For parsing
+import math  # For checking inf, -inf, and nan
 
 # Define ping and pong messages
 PING_MESSAGE = "PING"
 PONG_MESSAGE = "PONG"
-
 
 class SerialComs(QObject):
     # Define signals to communicate with the main application
@@ -22,6 +21,7 @@ class SerialComs(QObject):
     processed_ranges_avg = pyqtSignal(str)  # Changed to str to include "-i"
     encoder_position_received = pyqtSignal(int)  # New signal for encoder position
     extension_state_received = pyqtSignal(str)  # New signal for extension state
+    detection_received = pyqtSignal(str)  # New signal for detection messages
 
     def __init__(self, port=None, baudrate=None, timeout=1, parent=None):
         super().__init__(parent)
@@ -122,6 +122,12 @@ class SerialComs(QObject):
                         elif decoded_line == PING_MESSAGE:
                             # Respond to ping with pong
                             self.send_data(PONG_MESSAGE)
+                        elif decoded_line.startswith("DETECTION|"):
+                            # Handle detection messages
+                            detection_info = decoded_line.split('|', 1)[1]
+                            self.detection_received.emit(detection_info)
+                            self.data_received.emit(f"Detection: {detection_info}")
+                            print(f"Detection: {detection_info}")
                         else:
                             # Emit any other received data
                             self.process_message(decoded_line)
@@ -171,7 +177,7 @@ class SerialComs(QObject):
                             self.data_received.emit(f"Average Processed Ranges: {result}")
                             print(f"Averaged processed_ranges: {result}")
                         else:
-                            self.error.emit("All processed_ranges values are invalid.")
+                            pass
                     except Exception as e:
                         self.error.emit(f"Error parsing processed_ranges: {value} - {str(e)}")
                 elif topic == "encoder_position":
@@ -186,6 +192,12 @@ class SerialComs(QObject):
                     self.extension_state_received.emit(extension_state)
                     self.data_received.emit(f"Extension State: {extension_state}")
                     print(f"Extension State: {extension_state}")
+                elif topic == "detection":
+                    # Handle detection messages sent from ROS (if any)
+                    detection_info = value.strip()
+                    self.detection_received.emit(detection_info)
+                    self.data_received.emit(f"Detection: {detection_info}")
+                    print(f"Detection: {detection_info}")
                 else:
                     self.error.emit(f"Unknown topic: {topic}")
             except (ValueError, SyntaxError, TypeError) as e:
