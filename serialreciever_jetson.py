@@ -4,8 +4,6 @@ from std_msgs.msg import String, Float32, Int32, Float32MultiArray
 import serial
 import re
 import sys
-import time  # Added for time-based rate limiting
-
 
 class CombinedSerialROSNode:
     def __init__(self):
@@ -24,6 +22,7 @@ class CombinedSerialROSNode:
         self.extension_sub = rospy.Subscriber('/extension_setting', String, self.extension_data_callback)
         self.processed_ranges_sub = rospy.Subscriber('/processed_ranges', Float32MultiArray, self.processed_ranges_callback)
         self.encoder_position_sub = rospy.Subscriber('/encoder_position', Int32, self.encoder_position_callback)
+        self.detection_sub = rospy.Subscriber('/detection', String, self.detection_callback)  # Added subscriber
 
         # Initialize serial connection
         try:
@@ -41,9 +40,10 @@ class CombinedSerialROSNode:
         self.extend_pattern = re.compile(r'^\s*Extend\s*$', re.IGNORECASE)
         self.retract_pattern = re.compile(r'^\s*Retract\s*$', re.IGNORECASE)
         self.stop_pattern = re.compile(r'^\s*Stop\s*$', re.IGNORECASE)
-        self.position_hold_pattern = re.compile(r'^\s*Position_Hold\s*$', re.IGNORECASE)
-        self.auto_adjust_on_pattern = re.compile(r'^\s*AUTO_ADJUST_ON\s*$', re.IGNORECASE)
-        self.auto_adjust_off_pattern = re.compile(r'^\s*AUTO_ADJUST_OFF\s*$', re.IGNORECASE)
+        self.position_hold_pattern = re.compile(r'^\s*Position_Hold\s*$', re.IGNORECASE)  # New pattern
+        self.auto_adjust_on_pattern = re.compile(r'^\s*AUTO_ADJUST_ON\s*$', re.IGNORECASE)  # New pattern
+        self.auto_adjust_off_pattern = re.compile(r'^\s*AUTO_ADJUST_OFF\s*$', re.IGNORECASE)  # New pattern
+        # Altitude commands can be retained for flexibility
         self.altitude_pattern = re.compile(r'^\s*Altitude_(\d+(\.\d+)?)\s*$', re.IGNORECASE)
 
         # Define ping and pong messages
@@ -52,9 +52,6 @@ class CombinedSerialROSNode:
 
         # Prefix code for data messages
         self.DATA_PREFIX = "DATA|"
-
-        # Rate limiter for sending updates
-        self.last_update_time = 0  # Initialize the last update time
 
     def run(self):
         rate = rospy.Rate(10)  # 10 Hz
@@ -154,14 +151,9 @@ class CombinedSerialROSNode:
 
     def send_serial_data(self, topic, data):
         """
-        Formats and sends data over serial with a prefix code at 10 Hz.
+        Formats and sends data over serial with a prefix code.
         Format: DATA|topic_name:data\n
         """
-        current_time = time.time()
-        if current_time - self.last_update_time < 0.1:  # Maintain 10 Hz rate
-            return
-        self.last_update_time = current_time  # Update the last sent time
-
         try:
             # Convert data to string
             if isinstance(data, list):
@@ -201,6 +193,17 @@ class CombinedSerialROSNode:
         """
         position = msg.data
         self.send_serial_data("encoder_position", position)
+
+    def detection_callback(self, msg):
+        """
+        Callback for '/detection' topic.
+        Processes detection messages and outputs them.
+        """
+        detection = msg.data
+        rospy.loginfo(f"Detection received: {detection}")
+        # Here you can add additional processing if needed
+        # For example, send the detection over serial or trigger other actions
+        self.send_serial_data("detection", detection)
 
 if __name__ == '__main__':
     try:
