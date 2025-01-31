@@ -987,7 +987,7 @@ class MainWindow(QMainWindow):
     # *** Unified Handle Detection Function ***
     def handle_metal_detected(self, detection_info=None):
         """Handle metal detection events from key press or serial communication."""
-        status_text = "Metal Detected" if detection_info is None else f"Metal Detected - {detection_info}"
+        status_text = "Metal Detected"
         self.metal_detected_label.setText(status_text)
         self.metal_detected_label.show()
         # Hide the message after 3 seconds
@@ -1043,11 +1043,14 @@ class MainWindow(QMainWindow):
             # Save image with EXIF data
             try:
                 pil_image.save(image_path, "JPEG", exif=exif_bytes)
-                QMessageBox.information(self, "Image Saved", f"Image saved as {image_path} with EXIF GPS data.")
+                # QMessageBox.information(self, "Image Saved", f"Image saved as {image_path} with EXIF GPS data.")
+                pass
             except Exception as e:
-                QMessageBox.critical(self, "Save Error", f"Failed to save image: {e}")
+                # QMessageBox.critical(self, "Save Error", f"Failed to save image: {e}")
+                pass
         else:
-            QMessageBox.warning(self, "No Frame", "No frame available to save.")
+            # QMessageBox.warning(self, "No Frame", "No frame available to save.")
+            pass
     # *** End of Unified Handle Detection Function ***
 
     def convert_gps_to_exif(self, lat, lon, alt):
@@ -1248,7 +1251,7 @@ class MainWindow(QMainWindow):
     def extend_button_clicked(self):
         """Send the 'EXTEND' command over serial and update button styles."""
         if self.connected:
-            self.serial_coms.send_data("Retract")
+            self.serial_coms.send_data("Extend")
             # Update Extend button style to indicate active state
             self.bottom_button2.setStyleSheet("""
                 QPushButton { 
@@ -1289,7 +1292,7 @@ class MainWindow(QMainWindow):
     def retract_button_clicked(self):
         """Send the 'RETRACT' command over serial and update button styles."""
         if self.connected:
-            self.serial_coms.send_data("Extend")
+            self.serial_coms.send_data("Retract")
             # Update Retract button style to indicate active state
             self.bottom_button1.setStyleSheet("""
                 QPushButton { 
@@ -1430,7 +1433,7 @@ class MainWindow(QMainWindow):
 
     def handle_metal_detected(self, detection_info=None):
         """Handle metal detection events from key press or serial communication."""
-        status_text = "Metal Detected" if detection_info is None else f"Metal Detected - {detection_info}"
+        status_text = "Metal Detected"
         self.metal_detected_label.setText(status_text)
         self.metal_detected_label.show()
         # Hide the message after 3 seconds
@@ -1486,9 +1489,11 @@ class MainWindow(QMainWindow):
             # Save image with EXIF data
             try:
                 pil_image.save(image_path, "JPEG", exif=exif_bytes)
-                QMessageBox.information(self, "Image Saved", f"Image saved as {image_path} with EXIF GPS data.")
+                # QMessageBox.information(self, "Image Saved", f"Image saved as {image_path} with EXIF GPS data.")
+                pass
             except Exception as e:
-                QMessageBox.critical(self, "Save Error", f"Failed to save image: {e}")
+                # QMessageBox.critical(self, "Save Error", f"Failed to save image: {e}")
+                pass
         else:
             QMessageBox.warning(self, "No Frame", "No frame available to save.")
     # *** End of Added Section ***
